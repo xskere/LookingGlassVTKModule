@@ -39,8 +39,7 @@ IN THE SOFTWARE.
 =========================================================================*/
 #include "vtkLookingGlassInterface.h"
 
-#include "HoloPlayCore.h"
-#include "HoloPlayShadersOpen.h"
+#include "bridge.h"
 
 #include "vtkCamera.h"
 #include "vtkDataArray.h"
@@ -121,6 +120,19 @@ vtkOpenGLRenderWindow* vtkLookingGlassInterface::CreateLookingGlassRenderWindow(
 vtkStandardNewMacro(vtkLookingGlassInterface);
 
 //------------------------------------------------------------------------------
+// Explicitly disconnect the Bridge SDK and release the device
+void vtkLookingGlassInterface::Disconnect()
+{
+  if (this->Connected)
+  {
+    bool result = uninitialize_bridge();
+    this->Initialized = false;
+    this->Connected = false;
+    this->BridgeWindow = 0; // Reset window handle for next connection
+  }
+}
+
+//------------------------------------------------------------------------------
 vtkLookingGlassInterface::vtkLookingGlassInterface()
   : Connected(false)
   , DeviceIndex(0)
@@ -139,6 +151,14 @@ vtkLookingGlassInterface::vtkLookingGlassInterface()
   , MovieImageBuffer(nullptr)
   , MovieImageData(nullptr)
   , MovieWriter(nullptr)
+  , CalibrationPitch(45.0f)
+  , CalibrationTilt(0.0f)
+  , CalibrationCenter(0.0f)
+  , CalibrationSubp(0.00013f)
+  , CalibrationRi(0)
+  , CalibrationBi(2)
+  , CalibrationInvView(0)
+  , BridgeWindow(0)
 {
   this->DisplayPosition[0] = 0;
   this->DisplayPosition[1] = 0;
@@ -199,12 +219,8 @@ vtkLookingGlassInterface::~vtkLookingGlassInterface()
     this->MovieWriter = nullptr;
   }
 
-  // must tear down the message pipe before shut down the app
-  if (this->Connected)
-  {
-    hpc_CloseApp();
-    this->Connected = false;
-  }
+  // Explicitly disconnect Bridge SDK and release all resources
+  this->Disconnect();
 }
 
 vtkLookingGlassInterface::DeviceSettings::DeviceSettings(const std::string& name, int quiltWidth,
@@ -339,72 +355,89 @@ vtkOpenGLRenderWindow* vtkLookingGlassInterface::CreateSharedLookingGlassRenderW
 
 bool vtkLookingGlassInterface::GetLookingGlassInfo()
 {
-  hpc_client_error errco = hpc_InitializeApp("VTK", hpc_LICENSE_NONCOMMERCIAL);
-  if (errco)
+  if (!initialize_bridge(L"VTK"))
   {
-    std::string errstr;
-    switch (errco)
-    {
-      case hpc_CLIERR_NOSERVICE:
-        errstr = "HoloPlay Service not running";
-        break;
-      case hpc_CLIERR_SERIALIZEERR:
-        errstr = "Client message could not be serialized";
-        break;
-      case hpc_CLIERR_VERSIONERR:
-        errstr = "Incompatible version of HoloPlay Service";
-        break;
-      case hpc_CLIERR_PIPEERROR:
-        errstr = "Interprocess pipe broken";
-        break;
-      case hpc_CLIERR_SENDTIMEOUT:
-        errstr = "Interprocess pipe send timeout";
-        break;
-      case hpc_CLIERR_RECVTIMEOUT:
-        errstr = "Interprocess pipe receive timeout";
-        break;
-      default:
-        errstr = "Unknown error";
-        break;
-    }
-    vtkErrorMacro("Client access error (code = " << errco << "): " << errstr);
+    vtkErrorMacro("Failed to initialize Looking Glass Bridge");
     return false;
   }
 
-  char buf[1000];
-  hpc_GetHoloPlayCoreVersion(buf, 1000);
-  vtkDebugMacro("HoloPlay Core version " << buf);
-  hpc_GetHoloPlayServiceVersion(buf, 1000);
-  vtkDebugMacro("HoloPlay Service version " << buf);
-  int num_displays = hpc_GetNumDevices();
+  // Get Bridge version info
+  unsigned long major, minor, build;
+  int postfix_count = 0;
+  get_bridge_version(&major, &minor, &build, &postfix_count, nullptr);
+  std::vector<wchar_t> postfix(postfix_count);
+  get_bridge_version(&major, &minor, &build, &postfix_count, postfix.data());
+  vtkDebugMacro("Bridge version " << major << "." << minor << "." << build);
+
+  // Get number of displays
+  int num_displays = 0;
+  get_displays(&num_displays, nullptr);
   vtkDebugMacro("connected device count: " << num_displays);
   if (num_displays < 1)
   {
     return false;
   }
+
+  // Get display indices
+  std::vector<unsigned long> display_indices(num_displays);
+  get_displays(&num_displays, display_indices.data());
+
+  // Query device information for each display
   for (int i = 0; i < num_displays; ++i)
   {
-    vtkDebugMacro("Device information for display %d:\n" << i);
-    hpc_GetDeviceHDMIName(i, buf, 1000);
-    vtkDebugMacro("\tDevice name: " << buf);
-    hpc_GetDeviceType(i, buf, 1000);
-    vtkDebugMacro("\tDevice type: " << buf);
+    unsigned long display_index = display_indices[i];
+    vtkDebugMacro("Device information for display " << i << " (index " << display_index << "):\n");
+
+    // Get device name
+    int name_count = 0;
+    get_device_name_for_display(display_index, &name_count, nullptr);
+    std::vector<wchar_t> device_name(name_count);
+    get_device_name_for_display(display_index, &name_count, device_name.data());
+    std::wstring name_wstr(device_name.begin(), device_name.end());
+    std::string name_str(name_wstr.begin(), name_wstr.end());
+    vtkDebugMacro("\tDevice name: " << name_str);
+
+    // Get device type
+    int hw_enum = 0;
+    get_device_type_for_display(display_index, &hw_enum);
+    vtkDebugMacro("\tDevice type enum: " << hw_enum);
+
+    // Get window parameters
+    long pos_x = 0, pos_y = 0;
+    unsigned long width = 0, height = 0;
+    get_window_position_for_display(display_index, &pos_x, &pos_y);
+    get_dimensions_for_display(display_index, &width, &height);
     vtkDebugMacro("\nWindow parameters for display: " << i);
-    vtkDebugMacro(
-      "\tPosition: " << hpc_GetDevicePropertyWinX(i) << ", " << hpc_GetDevicePropertyWinY(i));
-    vtkDebugMacro(
-      "\tSize: " << hpc_GetDevicePropertyScreenW(i) << ", " << hpc_GetDevicePropertyScreenH(i));
-    vtkDebugMacro("\tAspect ratio: " << hpc_GetDevicePropertyDisplayAspect(i));
+    vtkDebugMacro("\tPosition: " << pos_x << ", " << pos_y);
+    vtkDebugMacro("\tSize: " << width << ", " << height);
+
+    // Get calibration parameters
+    float pitch = 0.0f, tilt = 0.0f, center = 0.0f, subp = 0.0f;
+    float viewcone = 0.0f, fringe = 0.0f, displayaspect = 0.0f;
+    int ri = 0, bi = 0, invView = 0;
+
+    get_pitch_for_display(display_index, &pitch);
+    get_tilt_for_display(display_index, &tilt);
+    get_center_for_display(display_index, &center);
+    get_subp_for_display(display_index, &subp);
+    get_viewcone_for_display(display_index, &viewcone);
+    get_fringe_for_display(display_index, &fringe);
+    get_displayaspect_for_display(display_index, &displayaspect);
+    get_ri_for_display(display_index, &ri);
+    get_bi_for_display(display_index, &bi);
+    get_invview_for_display(display_index, &invView);
+
+    vtkDebugMacro("\tAspect ratio: " << displayaspect);
     vtkDebugMacro("Shader uniforms for display " << i);
-    vtkDebugMacro("\tpitch: " << hpc_GetDevicePropertyPitch(i));
-    vtkDebugMacro("\ttilt: " << hpc_GetDevicePropertyTilt(i));
-    vtkDebugMacro("\tcenter: " << hpc_GetDevicePropertyCenter(i));
-    vtkDebugMacro("\tsubp: " << hpc_GetDevicePropertySubp(i));
-    vtkDebugMacro("\tviewCone: " << hpc_GetDevicePropertyFloat(i, "/calibration/viewCone/value"));
-    vtkDebugMacro("\tfringe: " << hpc_GetDevicePropertyFringe(i));
-    vtkDebugMacro("\tRI: " << hpc_GetDevicePropertyRi(i)
-                           << "\n \tBI: " << hpc_GetDevicePropertyBi(i)
-                           << "\tinvView: " << hpc_GetDevicePropertyInvView(i));
+    vtkDebugMacro("\tpitch: " << pitch);
+    vtkDebugMacro("\ttilt: " << tilt);
+    vtkDebugMacro("\tcenter: " << center);
+    vtkDebugMacro("\tsubp: " << subp);
+    vtkDebugMacro("\tviewCone: " << viewcone);
+    vtkDebugMacro("\tfringe: " << fringe);
+    vtkDebugMacro("\tRI: " << ri
+                           << "\n \tBI: " << bi
+                           << "\tinvView: " << invView);
   }
 
   return true;
@@ -453,9 +486,6 @@ void vtkLookingGlassInterface::SetupQuiltSettings(const std::string& deviceType)
   }
   else
   {
-    // Issue warning and default to "large" device
-    vtkWarningMacro(
-      "Unrecognized device type: '" << deviceType << "', defaulting to setting for 'large' device");
     auto deviceSettings = GetSettingsForDevice("large");
     this->SetupQuiltSettings(deviceSettings);
   }
@@ -473,39 +503,114 @@ void vtkLookingGlassInterface::Initialize(void)
   if (!GetLookingGlassInfo())
   {
     // must tear down the message pipe before shut down the app
-    hpc_CloseApp();
-    this->Connected = false;
+    uninitialize_bridge();
+    this->Initialized = false;
   }
   else
   {
     this->Connected = true;
 
+    // Get the display indices to map DeviceIndex to actual display
+    int num_displays = 0;
+    get_displays(&num_displays, nullptr);
+    std::vector<unsigned long> display_indices(num_displays);
+    get_displays(&num_displays, display_indices.data());
+
+    // Ensure the DeviceIndex is valid
+    if (this->DeviceIndex >= num_displays)
+    {
+      this->DeviceIndex = 0;
+    }
+
+    unsigned long display_index = display_indices[this->DeviceIndex];
+
     // get the viewcone here, which is used as a const
-    this->ViewAngle = hpc_GetDevicePropertyFloat(this->DeviceIndex, "/calibration/viewCone/value");
+    float viewcone = 0.0f;
+    get_viewcone_for_display(display_index, &viewcone);
+    this->ViewAngle = viewcone;
 
     // get the window coordinate from the uniform
-    this->DisplaySize[0] = hpc_GetDevicePropertyScreenW(this->DeviceIndex);
-    this->DisplaySize[1] = hpc_GetDevicePropertyScreenH(this->DeviceIndex);
-    this->DisplayPosition[0] = hpc_GetDevicePropertyWinX(this->DeviceIndex);
-    this->DisplayPosition[1] = hpc_GetDevicePropertyWinY(this->DeviceIndex);
+    unsigned long width = 0, height = 0;
+    long pos_x = 0, pos_y = 0;
+    get_dimensions_for_display(display_index, &width, &height);
+    get_window_position_for_display(display_index, &pos_x, &pos_y);
+
+    this->DisplaySize[0] = static_cast<int>(width);
+    this->DisplaySize[1] = static_cast<int>(height);
+    this->DisplayPosition[0] = static_cast<int>(pos_x);
+    this->DisplayPosition[1] = static_cast<int>(pos_y);
 
     // Default the adjust camera aspect ratio to the device's aspect ratio
     this->AdjustCameraAspectRatio =
       static_cast<double>(this->DisplaySize[0]) / this->DisplaySize[1];
 
+    // Get calibration parameters for lenticular shader
+    float pitch = 0.0f, tilt = 0.0f, center = 0.0f, subp = 0.0f;
+    int ri = 0, bi = 0, invView = 0;
+
+    get_pitch_for_display(display_index, &pitch);
+    get_tilt_for_display(display_index, &tilt);
+    get_center_for_display(display_index, &center);
+    get_subp_for_display(display_index, &subp);
+    get_ri_for_display(display_index, &ri);
+    get_bi_for_display(display_index, &bi);
+    get_invview_for_display(display_index, &invView);
+
+    // Store calibration values
+    this->CalibrationPitch = pitch;
+    this->CalibrationTilt = tilt;
+    this->CalibrationCenter = center;
+    this->CalibrationSubp = subp;
+    this->CalibrationRi = ri;
+    this->CalibrationBi = bi;
+    this->CalibrationInvView = invView;
+
     // get the device type if one hasn't been set
     if (this->DeviceType.empty())
     {
-      char buf[100];
-      hpc_GetDeviceType(this->DeviceIndex, buf, 100);
-      this->DeviceType = buf;
+      int hw_enum = 0;
+      get_device_type_for_display(display_index, &hw_enum);
+
+      // Map hw_enum to device type string - this is a simplified mapping
+      // You may need to adjust based on actual enum values from bridge.h
+      switch(hw_enum)
+      {
+        case 0: this->DeviceType = "standard"; break;
+        case 1: this->DeviceType = "large"; break;
+        case 2: this->DeviceType = "portrait"; break;
+        case 3: this->DeviceType = "8k"; break;
+        case 4: this->DeviceType = "go_p"; break;
+        default:
+          // Try to get device name and derive type from it
+          int name_count = 0;
+          get_device_name_for_display(display_index, &name_count, nullptr);
+          if (name_count > 0)
+          {
+            std::vector<wchar_t> device_name(name_count);
+            get_device_name_for_display(display_index, &name_count, device_name.data());
+            std::wstring name_wstr(device_name.begin(), device_name.end());
+            std::string name_str(name_wstr.begin(), name_wstr.end());
+
+            // Try to match device name to known types
+            if (name_str.find("Portrait") != std::string::npos)
+              this->DeviceType = "portrait";
+            else if (name_str.find("16") != std::string::npos)
+              this->DeviceType = "large";
+            else if (name_str.find("32") != std::string::npos)
+              this->DeviceType = "8k";
+            else if (name_str.find("65") != std::string::npos)
+              this->DeviceType = "65";
+            else if (name_str.find("Go") != std::string::npos)
+              this->DeviceType = "go_p";
+          }
+          break;
+      }
     }
   }
 
   // If we still don't have a device type default to "large"
   if (this->DeviceType.empty())
   {
-    vtkWarningMacro("No Looking Glass device attached defaulting to 'large'");
     this->DeviceType = "large";
   }
 
@@ -533,7 +638,9 @@ void vtkLookingGlassInterface::AdjustCamera(vtkCamera* cam, int currentViewIndex
   // float cameraDistance = -cameraSize / tan(fov / 2.0f);
 
   int totalViews = this->QuiltTiles[0] * this->QuiltTiles[1];
-  double offsetAngle = (currentViewIndex / (totalViews - 1.0f) - 0.5f) *
+  // Reverse the view index for correct parallax direction
+  int reversedViewIndex = (totalViews - 1) - currentViewIndex;
+  double offsetAngle = (reversedViewIndex / (totalViews - 1.0f) - 0.5f) *
     vtkMath::RadiansFromDegrees(this->ViewAngle); // start at -viewCone * 0.5 and go
                                                   // up to viewCone * 0.5
 
@@ -581,38 +688,35 @@ void vtkLookingGlassInterface::DrawLightField(vtkOpenGLRenderWindow* renWin)
 void vtkLookingGlassInterface::DrawLightFieldInternal(
   vtkOpenGLRenderWindow* renWin, vtkTextureObject* tex)
 {
-  // Simple default vertex and fragment shaders
-  static const std::string defaultVS =
-    R"***(
-    //VTK::System::Dec
-    in vec4 ndCoordIn;
-    in vec2 texCoordIn;
-    out vec2 texCoords;
-    void main()
-    {
-      gl_Position = ndCoordIn;
-      texCoords = texCoordIn;
-    }
-  )***";
-
-  static const std::string defaultFS =
-    R"***(
-      //VTK::System::Dec
-
-      in vec2 texCoords;
-      out vec4 fragColor;
-      uniform sampler2D screenTex;
-      void main()
-      {
-    		fragColor = vec4(texture(screenTex, texCoords.xy).rgb, 1.0);
-      }
-  )***";
-
-  vtkOpenGLQuadHelper* blend = nullptr;
-
   if (!this->Connected)
   {
-    // Use the QuiltBlend
+    // When not connected to a Looking Glass display, just render the quilt directly
+    // Simple passthrough shader
+    static const std::string defaultVS =
+      R"***(
+      //VTK::System::Dec
+      in vec4 ndCoordIn;
+      in vec2 texCoordIn;
+      out vec2 texCoords;
+      void main()
+      {
+        gl_Position = ndCoordIn;
+        texCoords = texCoordIn;
+      }
+    )***";
+
+    static const std::string defaultFS =
+      R"***(
+        //VTK::System::Dec
+        in vec2 texCoords;
+        out vec4 fragColor;
+        uniform sampler2D screenTex;
+        void main()
+        {
+          fragColor = vec4(texture(screenTex, texCoords.xy).rgb, 1.0);
+        }
+    )***";
+
     if (!this->QuiltBlend)
     {
       this->QuiltBlend = new vtkOpenGLQuadHelper(renWin, defaultVS.c_str(), defaultFS.c_str(), "");
@@ -621,71 +725,60 @@ void vtkLookingGlassInterface::DrawLightFieldInternal(
     {
       renWin->GetShaderCache()->ReadyShaderProgram(this->QuiltBlend->Program);
     }
-    blend = this->QuiltBlend;
-  }
-  else
-  {
-    // Use the FinalBlend
-    if (!this->FinalBlend)
-    {
-      // just add the standard VTK header to the fragment shader
-      std::string fshader = "//VTK::System::Dec\n\n";
-      fshader += hpc_LightfieldFragShaderGLSL;
-      this->FinalBlend = new vtkOpenGLQuadHelper(renWin, defaultVS.c_str(), fshader.c_str(), "");
-    }
-    else
-    {
-      renWin->GetShaderCache()->ReadyShaderProgram(this->FinalBlend->Program);
-    }
-    blend = this->FinalBlend;
-  }
-
-  if (blend->Program)
-  {
-    auto& prog = blend->Program;
-
-    if (this->Connected)
-    {
-      // prog->SetUniformi("debug", 1);
-      prog->SetUniformf("pitch", hpc_GetDevicePropertyPitch(this->DeviceIndex));
-      prog->SetUniformf("tilt", hpc_GetDevicePropertyTilt(this->DeviceIndex));
-      prog->SetUniformf("center", hpc_GetDevicePropertyCenter(this->DeviceIndex));
-      prog->SetUniformi("invView", hpc_GetDevicePropertyInvView(this->DeviceIndex));
-      prog->SetUniformi("quiltInvert", 0);
-      prog->SetUniformf("subp", hpc_GetDevicePropertySubp(this->DeviceIndex));
-      prog->SetUniformi("ri", hpc_GetDevicePropertyRi(this->DeviceIndex));
-      prog->SetUniformi("bi", hpc_GetDevicePropertyBi(this->DeviceIndex));
-      prog->SetUniformf("displayAspect", hpc_GetDevicePropertyDisplayAspect(this->DeviceIndex));
-      prog->SetUniformf("quiltAspect", hpc_GetDevicePropertyDisplayAspect(this->DeviceIndex));
-      prog->SetUniformi("overscan", 0);
-
-      float tmp3[3];
-      tmp3[0] = this->QuiltTiles[0];
-      tmp3[1] = this->QuiltTiles[1];
-      tmp3[2] = this->NumberOfTiles;
-      prog->SetUniform3f("tile", tmp3);
-
-      float tmp2[2];
-      tmp2[0] = this->RenderSize[0] * this->QuiltTiles[0] / (float)this->QuiltSize[0];
-      tmp2[1] = this->RenderSize[1] * this->QuiltTiles[1] / (float)this->QuiltSize[1];
-      prog->SetUniform2f("viewPortion", tmp2);
-    }
 
     renWin->GetState()->vtkglDepthMask(GL_FALSE);
     renWin->GetState()->vtkglDisable(GL_DEPTH_TEST);
-
     renWin->GetState()->vtkglViewport(0, 0, this->DisplaySize[0], this->DisplaySize[1]);
     renWin->GetState()->vtkglScissor(0, 0, this->DisplaySize[0], this->DisplaySize[1]);
 
     tex->Activate();
-    prog->SetUniformi("screenTex", tex->GetTextureUnit());
-
-    // draw the full screen quad using the special shader
-    blend->Render();
-
+    this->QuiltBlend->Program->SetUniformi("screenTex", tex->GetTextureUnit());
+    this->QuiltBlend->Render();
     tex->Deactivate();
 
     renWin->GetState()->vtkglDepthMask(GL_TRUE);
+  }
+  else
+  {
+    // Use Bridge SDK's native lenticular rendering
+    // This automatically handles all calibration and interlacing
+
+    // Get display index for Bridge SDK
+    int num_displays = 0;
+    get_displays(&num_displays, nullptr);
+    std::vector<unsigned long> display_indices(num_displays);
+    get_displays(&num_displays, display_indices.data());
+
+    unsigned long display_index = (this->DeviceIndex < num_displays)
+      ? display_indices[this->DeviceIndex]
+      : display_indices[0];
+
+    // Create Bridge SDK window handle if not already created
+    if (this->BridgeWindow == 0)
+    {
+      WINDOW_HANDLE tempWindow = 0;
+      if (instance_window_gl(&tempWindow, display_index))
+      {
+        this->BridgeWindow = tempWindow;
+      }
+      else
+      {
+        vtkErrorMacro("Failed to create Bridge SDK window for lenticular rendering");
+        return;
+      }
+    }
+    // Use Bridge SDK's native rendering - it handles all the lenticular math!
+    draw_interop_quilt_texture_gl(
+      this->BridgeWindow,
+        static_cast<unsigned long long>(tex->GetHandle()),
+        PixelFormats::RGBA,  // VTK typically uses RGBA
+        static_cast<unsigned long>(this->QuiltSize[0]),
+        static_cast<unsigned long>(this->QuiltSize[1]),
+        static_cast<unsigned long>(this->QuiltTiles[0]),
+        static_cast<unsigned long>(this->QuiltTiles[1]),
+        static_cast<float>(this->AdjustCameraAspectRatio),
+        1.0f  // zoom
+      );
   }
 }
 
@@ -788,8 +881,17 @@ void vtkLookingGlassInterface::GetFramebuffers(vtkOpenGLRenderWindow* renWin,
 // Simply compute and return the position in the quilt for a tile
 void vtkLookingGlassInterface::GetTilePosition(int tile, int pos[2])
 {
-  pos[0] = (tile % this->QuiltTiles[0]) * this->RenderSize[0];
-  pos[1] = (tile / this->QuiltTiles[0]) * this->RenderSize[1];
+  int col = tile % this->QuiltTiles[0];
+  int row = tile / this->QuiltTiles[0];
+
+  // Reverse column order if invView is set (for Bridge SDK compatibility)
+  if (this->CalibrationInvView != 0)
+  {
+    col = (this->QuiltTiles[0] - 1) - col;
+  }
+
+  pos[0] = col * this->RenderSize[0];
+  pos[1] = row * this->RenderSize[1];
 }
 
 void vtkLookingGlassInterface::RenderQuilt(vtkOpenGLRenderWindow* rw,
@@ -894,10 +996,20 @@ void vtkLookingGlassInterface::RenderQuilt(vtkOpenGLRenderWindow* rw,
     this->GetTilePosition(tile, destPos);
 
     // blit to quilt
+    // If invView is set, flip the Y axis by swapping source Y coordinates
     ostate->vtkglViewport(destPos[0], destPos[1], renderSize[0], renderSize[1]);
     ostate->vtkglScissor(destPos[0], destPos[1], renderSize[0], renderSize[1]);
-    glBlitFramebuffer(0, 0, renderSize[0], renderSize[1], destPos[0], destPos[1],
-      destPos[0] + renderSize[0], destPos[1] + renderSize[1], GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    if (this->CalibrationInvView != 0)
+    {
+      // Flip Y by reversing source Y coordinates
+      glBlitFramebuffer(0, renderSize[1], renderSize[0], 0, destPos[0], destPos[1],
+        destPos[0] + renderSize[0], destPos[1] + renderSize[1], GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    }
+    else
+    {
+      glBlitFramebuffer(0, 0, renderSize[0], renderSize[1], destPos[0], destPos[1],
+        destPos[0] + renderSize[0], destPos[1] + renderSize[1], GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    }
   }
   ostate->PopFramebufferBindings();
 

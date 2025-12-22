@@ -17,16 +17,40 @@
 #import <Cocoa/Cocoa.h>
 #import <Foundation/Foundation.h>
 #import <IOKit/graphics/IOGraphicsLib.h>
-#include "HoloPlayCore.h"
+#include "bridge.h"
 
 //------------------------------------------------------------------------------
 void vtkCocoaLookingGlassRenderWindow::Initialize()
 {
-  // Limited to device 0 fow now
-  char buf[1000];
+  // Get device index
   int deviceIndex = this->Interface->GetDeviceIndex();
-  hpc_GetDeviceHDMIName(deviceIndex, buf, 1000);
-  std::string deviceName(buf);
+
+  // Get display indices
+  int num_displays = 0;
+  get_displays(&num_displays, nullptr);
+  if (num_displays == 0)
+  {
+    this->Superclass::Initialize();
+    return;
+  }
+
+  std::vector<unsigned long> display_indices(num_displays);
+  get_displays(&num_displays, display_indices.data());
+
+  if (deviceIndex >= num_displays)
+  {
+    deviceIndex = 0;
+  }
+
+  unsigned long display_index = display_indices[deviceIndex];
+
+  // Get device name
+  int name_count = 0;
+  get_device_name_for_display(display_index, &name_count, nullptr);
+  std::vector<wchar_t> device_name_wchar(name_count);
+  get_device_name_for_display(display_index, &name_count, device_name_wchar.data());
+  std::wstring name_wstr(device_name_wchar.begin(), device_name_wchar.end());
+  std::string deviceName(name_wstr.begin(), name_wstr.end());
 
   // Default to display 1, assuming the LG display is the only auxilliary display
   int displayId = 1;
