@@ -1,0 +1,26 @@
+LIBRARY bridge_inproc
+EXPORTS
+    initialize_bridge
+    uninitialize_bridge
+    get_bridge_version
+    get_displays
+    get_device_name_for_display
+    get_dimensions_for_display
+    get_window_position_for_display
+    get_device_type_for_display
+    get_invview_for_display
+    get_ri_for_display
+    get_bi_for_display
+    get_tilt_for_display
+    get_displayaspect_for_display
+    get_fringe_for_display
+    get_subp_for_display
+    get_viewcone_for_display
+    get_pitch_for_display
+    get_center_for_display
+    get_default_quilt_settings_for_display
+    instance_window_gl
+    instance_offscreen_window_gl
+    get_offscreen_window_texture_gl
+    set_interop_quilt_texture_gl
+    draw_interop_quilt_texture_gl

@@ -266,6 +266,11 @@ public:
    */
   static DeviceTypes GetDevices();
 
+  /**
+   * Disconnect from the Looking Glass device.
+   */
+  void Disconnect();
+
 protected:
   /**
    * struct to hold device specfic settings.
@@ -345,6 +350,9 @@ protected:
   // are we connected to a looking glass device
   bool Connected;
 
+  // Bridge SDK window handle
+  unsigned long long BridgeWindow;
+
   // Are we recording a movie
   bool IsRecording;
 
@@ -357,6 +365,15 @@ protected:
   vtkImageData* MovieImageBuffer;
   vtkImageData* MovieImageData;
   vtkGenericMovieWriter* MovieWriter;
+
+  // Calibration parameters for lenticular shader
+  float CalibrationPitch;
+  float CalibrationTilt;
+  float CalibrationCenter;
+  float CalibrationSubp;
+  int CalibrationRi;
+  int CalibrationBi;
+  int CalibrationInvView;
 
   void DrawLightFieldInternal(vtkOpenGLRenderWindow* renWin, vtkTextureObject* tex);
 

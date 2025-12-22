@@ -28,57 +28,74 @@ renderer. For an example of that approach please see
 
 ### Build Requirements
 
-Building this modules requires the Looking Glass Factory's
-`HoloPlayCoreSDK`. You must request a copy of the HoloPlayCoreSDK
-directly from Looking Glass Factory.
+**Important: This module now uses the Looking Glass Bridge SDK (v2.4+), which replaces the legacy HoloPlayCore SDK.**
 
-The SDK is described
-[here](https://docs.lookingglassfactory.com/holoplay-core/holoplay-core-sdk).
+Building this module requires the Looking Glass Bridge SDK, which is automatically installed
+when you install [Looking Glass Bridge](https://lookingglassfactory.com/software/looking-glass-bridge)
+(version 2.4.10 or later). The Bridge SDK provides support for all modern Looking Glass displays
+including the 16", 32", and 65" Light Field displays released after 2022.
 
-You can request access to their SDK
-[here](https://lookingglassfactory.com/software#holoplay-core).
+#### Installing Looking Glass Bridge
 
-Access is granted nearly instantaneously.  Their SDK includes dylibs
-(shared libraries) for MacOS, Linux, and Windows (32 and 64bit).
+1. Download and install Looking Glass Bridge from [lookingglassfactory.com](https://lookingglassfactory.com/software/looking-glass-bridge)
+2. The Bridge SDK headers and libraries are automatically installed:
+   - **Windows**: `C:\Program Files\Looking Glass\Looking Glass Bridge [version]\runtime` (headers)
+     and `C:\Program Files\Looking Glass\Looking Glass Bridge [version]` (libraries)
+   - **macOS**: `/Applications/Looking Glass Bridge [version].app/Contents/runtime` (headers)
+     and `/Applications/Looking Glass Bridge [version].app/Contents/MacOS` (libraries)
 
-We recommend installing their SDK at the same level as the
-VTK source directory, so that it can be automatically found by VTK during
-compilation.  For example, if VTK souce is in `/src/VTK` on your system,
-then uncompress the HoloPlaceCoreSDK (which is currently at version 0.2.0) into
-the `/src` directory.   The path to the HoloPlayCoreSDK include directory
-would then be `/src/HoloPlayCore-0.2.0/HoloPlayCoreSDK-master/HoloPlayCore/include`.
-VTK can then automatically find the include and appropriate dylib files
-during CMake configuration of VTK,  otherwise you will have to specify
-the paths to those files manually during CMake configuration.
+#### Legacy HoloPlayCore SDK Support
+
+For legacy displays (Looking Glass 8.9", 15.6", original 16" and 8K Gen1), you can still use
+the older HoloPlayCore SDK. However, we recommend using Bridge SDK as it supports both legacy
+and modern displays.
+
+The legacy SDK is described [here](https://docs.lookingglassfactory.com/legacy/legacy-software/core-sdk).
 
 ### CMake Configuration of VTK
 
-When configuring VTK using CMake, enable this remote module and its dependencies by setting
-1. VTK_MODULE_ENABLE_VTK_RenderingLookingGlass to YES
-2. VTK_USE_VIDEO_FOR_WINDOWS to ON
-3. VTK_USE_MICROSOFT_MEDIA_FOUNDATION to ON
+When configuring VTK using CMake, enable this remote module and its dependencies by setting:
 
-You must also specify
-1. HoloPlayCore_INCLUDE_DIR
-2. HoloPlayCore_LIBRARY
+1. `VTK_MODULE_ENABLE_VTK_RenderingLookingGlass` to `YES`
+2. `VTK_USE_VIDEO_FOR_WINDOWS` to `ON` (Windows only)
+3. `VTK_USE_MICROSOFT_MEDIA_FOUNDATION` to `ON` (Windows only)
 
-based on where you have installed the HoloPlayCore SDK, if they are not
-automatically found.
+The CMake configuration will automatically search for the Bridge SDK in the standard Looking Glass
+Bridge installation directories. If the SDK is not found automatically, you can manually specify:
+
+1. `BridgeSDK_INCLUDE_DIR` - Path to the `bridge.h` header (e.g., `C:/Program Files/Looking Glass/Looking Glass Bridge 2.6.0/runtime`)
+2. `BridgeSDK_LIBRARY` - Path to the Bridge SDK library (e.g., `C:/Program Files/Looking Glass/Looking Glass Bridge 2.6.0/HoloPlayCore.lib`)
+
+**Note:** For backward compatibility, the old `HoloPlayCore_INCLUDE_DIR` and `HoloPlayCore_LIBRARY`
+variables are still supported and will be mapped to the Bridge SDK paths.
 
 ### Compilation
 
-With this module enabled in CMake, build VTK as usual for your platform. We
-currently support Windows, OSX, and Linux platforms.
-
 ### Running VTK applications
 
-Since the HoloPlayCoreSDK is distribued as shared libraries, their location
-must be known when executing a VTK-based application if that version of
-VTK was compiled with this module enabled.
+The Bridge SDK uses shared libraries (DLLs on Windows, dylibs on macOS, SOs on Linux) that must be
+accessible at runtime.
 
-We recommend adding the path to the appropriate shared lib to your system's
-PATH/LD_LIBRARY_PATH variables.  They will then be automatically found
-when running VTK applications that were compiled with this module enabled.
+**Important:** You must have Looking Glass Bridge running for the application to connect to Looking
+Glass displays.
+
+#### Windows
+Add the Bridge installation directory to your PATH:
+```
+set PATH=%PATH%;C:\Program Files\Looking Glass\Looking Glass Bridge 2.6.0
+```
+
+#### macOS
+Add the Bridge application bundle to your library path:
+```
+export DYLD_LIBRARY_PATH=/Applications/Looking Glass Bridge 2.6.0.app/Contents/MacOS:$DYLD_LIBRARY_PATH
+```
+
+#### Linux
+Add the Bridge library directory to your LD_LIBRARY_PATH (when Linux support is available).
+
+System-level access to the shared libraries is required for both C++ applications and Python-wrapped
+VTK when this module is enabled.nabled.
 
 System-level access to the shared libs is also required when running the
 Python wrapped VTK if this module was enabled when it was compiled.
