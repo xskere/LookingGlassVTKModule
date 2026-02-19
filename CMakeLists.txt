@@ -67,4 +67,20 @@ if (VTK_WHEEL_BUILD)
   install(
     FILES "${HoloPlayCore_RUNTIME_LIBRARY}"
     DESTINATION "${CMAKE_INSTALL_LIBDIR}/vtkmodules")
+else()
+  # For regular installs (CPack, Slicer extensions, etc.) install the runtime
+  # library to the standard platform location so packagers pick it up.
+  if (WIN32)
+    set(_runtime_dest "${CMAKE_INSTALL_BINDIR}")
+    # Install all DLLs from the SDK directory, not just the primary one
+    get_filename_component(_bridge_sdk_dir "${HoloPlayCore_RUNTIME_LIBRARY}" DIRECTORY)
+    file(GLOB _bridge_runtime_files "${_bridge_sdk_dir}/*.dll")
+  else()
+    set(_runtime_dest "${CMAKE_INSTALL_LIBDIR}")
+    set(_bridge_runtime_files "${HoloPlayCore_RUNTIME_LIBRARY}")
+  endif()
+  install(
+    FILES ${_bridge_runtime_files}
+    DESTINATION "${_runtime_dest}"
+    COMPONENT "runtime")
 endif()
