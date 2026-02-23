@@ -44,6 +44,7 @@ IN THE SOFTWARE.
 #include "vtkCamera.h"
 #include "vtkDataArray.h"
 #include "vtkImageData.h"
+#include "vtkLogger.h"
 #include "vtkMath.h"
 #include "vtkNew.h"
 #include "vtkObjectFactory.h"
@@ -393,7 +394,7 @@ bool vtkLookingGlassInterface::GetLookingGlassInfo()
     get_device_name_for_display(display_index, &name_count, nullptr);
     std::vector<wchar_t> device_name(name_count);
     get_device_name_for_display(display_index, &name_count, device_name.data());
-    std::wstring name_wstr(device_name.begin(), device_name.end());
+    std::wstring name_wstr(device_name.data()); // stops at null terminator
     std::string name_str(name_wstr.begin(), name_wstr.end());
     vtkDebugMacro("\tDevice name: " << name_str);
 
@@ -479,6 +480,7 @@ void vtkLookingGlassInterface::SetupQuiltSettings(int preset)
 void vtkLookingGlassInterface::SetupQuiltSettings(const std::string& deviceType)
 {
   auto byDevice = this->GetSettingsByDevice();
+  vtkLog(INFO, "Setting up quilt settings for device type: " << deviceType);
   if (byDevice.count(deviceType))
   {
     auto deviceSettings = byDevice[deviceType];
@@ -486,6 +488,7 @@ void vtkLookingGlassInterface::SetupQuiltSettings(const std::string& deviceType)
   }
   else
   {
+    vtkWarningMacro("Unknown device type \"" << deviceType << "\", falling back to \"large\"");
     auto deviceSettings = GetSettingsForDevice("large");
     this->SetupQuiltSettings(deviceSettings);
   }
@@ -565,56 +568,55 @@ void vtkLookingGlassInterface::Initialize(void)
     this->CalibrationBi = bi;
     this->CalibrationInvView = invView;
 
-    // get the device type if one hasn't been set
+    // Get the device name for informational purposes
     if (this->DeviceType.empty())
     {
-      int hw_enum = 0;
-      get_device_type_for_display(display_index, &hw_enum);
-
-      // Map hw_enum to device type string - this is a simplified mapping
-      // You may need to adjust based on actual enum values from bridge.h
-      switch(hw_enum)
+      int name_count = 0;
+      get_device_name_for_display(display_index, &name_count, nullptr);
+      if (name_count > 0)
       {
-        case 0: this->DeviceType = "standard"; break;
-        case 1: this->DeviceType = "large"; break;
-        case 2: this->DeviceType = "portrait"; break;
-        case 3: this->DeviceType = "8k"; break;
-        case 4: this->DeviceType = "go_p"; break;
-        default:
-          // Try to get device name and derive type from it
-          int name_count = 0;
-          get_device_name_for_display(display_index, &name_count, nullptr);
-          if (name_count > 0)
-          {
-            std::vector<wchar_t> device_name(name_count);
-            get_device_name_for_display(display_index, &name_count, device_name.data());
-            std::wstring name_wstr(device_name.begin(), device_name.end());
-            std::string name_str(name_wstr.begin(), name_wstr.end());
-
-            // Try to match device name to known types
-            if (name_str.find("Portrait") != std::string::npos)
-              this->DeviceType = "portrait";
-            else if (name_str.find("16") != std::string::npos)
-              this->DeviceType = "large";
-            else if (name_str.find("32") != std::string::npos)
-              this->DeviceType = "8k";
-            else if (name_str.find("65") != std::string::npos)
-              this->DeviceType = "65";
-            else if (name_str.find("Go") != std::string::npos)
-              this->DeviceType = "go_p";
-          }
-          break;
+        std::vector<wchar_t> device_name(name_count);
+        get_device_name_for_display(display_index, &name_count, device_name.data());
+        std::wstring name_wstr(device_name.data()); // stops at null terminator
+        this->DeviceType = std::string(name_wstr.begin(), name_wstr.end());
+        vtkLog(INFO, "Detected device: \"" << this->DeviceType << "\"");
       }
+    }
+
+    // Query the SDK directly for the optimal quilt settings for this device
+    float sdkAspect = 0.0f;
+    int sdkQuiltWidth = 0, sdkQuiltHeight = 0, sdkColumns = 0, sdkRows = 0;
+    if (get_default_quilt_settings_for_display(display_index, &sdkAspect,
+          &sdkQuiltWidth, &sdkQuiltHeight, &sdkColumns, &sdkRows))
+    {
+      vtkLog(INFO, "SDK quilt settings: " << sdkQuiltWidth << "x" << sdkQuiltHeight
+        << " px, " << sdkColumns << "x" << sdkRows << " tiles, aspect " << sdkAspect);
+      this->QuiltSize[0] = sdkQuiltWidth;
+      this->QuiltSize[1] = sdkQuiltHeight;
+      this->QuiltTiles[0] = sdkColumns;
+      this->QuiltTiles[1] = sdkRows;
+      this->AdjustCameraAspectRatio = static_cast<double>(sdkAspect);
+    }
+    else
+    {
+      vtkWarningMacro("get_default_quilt_settings_for_display failed, using hardcoded preset");
+      if (this->DeviceType.empty())
+      {
+        this->DeviceType = "large";
+      }
+      this->SetupQuiltSettings(this->DeviceType);
     }
   }
 
-  // If we still don't have a device type default to "large"
-  if (this->DeviceType.empty())
+  // If not connected to a device, fall back to the hardcoded preset
+  if (!this->Connected)
   {
-    this->DeviceType = "large";
+    if (this->DeviceType.empty())
+    {
+      this->DeviceType = "large";
+    }
+    this->SetupQuiltSettings(this->DeviceType);
   }
-
-  this->SetupQuiltSettings(this->DeviceType);
 
   this->NumberOfTiles = this->QuiltTiles[0] * this->QuiltTiles[1];
 
