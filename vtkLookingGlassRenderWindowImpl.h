@@ -217,3 +217,11 @@ std::vector<std::string> className::GetDeviceTypes()
 
   return types;
 }
+
+//------------------------------------------------------------------------------
+void className::SetCustomQuiltSettings(
+  int tilesX, int tilesY, int quiltWidth, int quiltHeight)
+{
+  this->Interface->ReleaseGraphicsResources(this);
+  this->Interface->SetCustomQuiltSettings(tilesX, tilesY, quiltWidth, quiltHeight);
+}

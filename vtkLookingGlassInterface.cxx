@@ -45,6 +45,7 @@ IN THE SOFTWARE.
 #include "vtkDataArray.h"
 #include "vtkImageData.h"
 #include "vtkLogger.h"
+#include "vtkOutputWindow.h"
 #include "vtkMath.h"
 #include "vtkNew.h"
 #include "vtkObjectFactory.h"
@@ -66,6 +67,14 @@ IN THE SOFTWARE.
 #include "vtk_glad.h"
 
 #include "vtkRenderingOpenGLConfigure.h"
+
+#define vtkLGInfoMacro(x)                                                                          \
+  do                                                                                               \
+  {                                                                                                \
+    std::ostringstream _lgmsg;                                                                     \
+    _lgmsg << x << "\n";                                                                           \
+    vtkOutputWindow::GetInstance()->DisplayText(_lgmsg.str().c_str());                            \
+  } while (false)
 
 #ifdef WIN32
 #include "vtkWin32LookingGlassRenderWindow.h"
@@ -356,6 +365,8 @@ vtkOpenGLRenderWindow* vtkLookingGlassInterface::CreateSharedLookingGlassRenderW
 
 bool vtkLookingGlassInterface::GetLookingGlassInfo()
 {
+  vtkWarningMacro("GetLookingGlassInfo called");
+
   if (!initialize_bridge(L"VTK"))
   {
     vtkErrorMacro("Failed to initialize Looking Glass Bridge");
@@ -368,12 +379,12 @@ bool vtkLookingGlassInterface::GetLookingGlassInfo()
   get_bridge_version(&major, &minor, &build, &postfix_count, nullptr);
   std::vector<wchar_t> postfix(postfix_count);
   get_bridge_version(&major, &minor, &build, &postfix_count, postfix.data());
-  vtkDebugMacro("Bridge version " << major << "." << minor << "." << build);
+  vtkLGInfoMacro("Bridge version " << major << "." << minor << "." << build);
 
   // Get number of displays
   int num_displays = 0;
   get_displays(&num_displays, nullptr);
-  vtkDebugMacro("connected device count: " << num_displays);
+  vtkLGInfoMacro("connected device count: " << num_displays);
   if (num_displays < 1)
   {
     return false;
@@ -387,7 +398,7 @@ bool vtkLookingGlassInterface::GetLookingGlassInfo()
   for (int i = 0; i < num_displays; ++i)
   {
     unsigned long display_index = display_indices[i];
-    vtkDebugMacro("Device information for display " << i << " (index " << display_index << "):\n");
+    vtkLGInfoMacro("Device information for display " << i << " (index " << display_index << "):\n");
 
     // Get device name
     int name_count = 0;
@@ -396,21 +407,21 @@ bool vtkLookingGlassInterface::GetLookingGlassInfo()
     get_device_name_for_display(display_index, &name_count, device_name.data());
     std::wstring name_wstr(device_name.data()); // stops at null terminator
     std::string name_str(name_wstr.begin(), name_wstr.end());
-    vtkDebugMacro("\tDevice name: " << name_str);
+    vtkLGInfoMacro("\tDevice name: " << name_str);
 
     // Get device type
     int hw_enum = 0;
     get_device_type_for_display(display_index, &hw_enum);
-    vtkDebugMacro("\tDevice type enum: " << hw_enum);
+    vtkLGInfoMacro("\tDevice type enum: " << hw_enum);
 
     // Get window parameters
     long pos_x = 0, pos_y = 0;
     unsigned long width = 0, height = 0;
     get_window_position_for_display(display_index, &pos_x, &pos_y);
     get_dimensions_for_display(display_index, &width, &height);
-    vtkDebugMacro("\nWindow parameters for display: " << i);
-    vtkDebugMacro("\tPosition: " << pos_x << ", " << pos_y);
-    vtkDebugMacro("\tSize: " << width << ", " << height);
+    vtkLGInfoMacro("\nWindow parameters for display: " << i);
+    vtkLGInfoMacro("\tPosition: " << pos_x << ", " << pos_y);
+    vtkLGInfoMacro("\tSize: " << width << ", " << height);
 
     // Get calibration parameters
     float pitch = 0.0f, tilt = 0.0f, center = 0.0f, subp = 0.0f;
@@ -428,15 +439,15 @@ bool vtkLookingGlassInterface::GetLookingGlassInfo()
     get_bi_for_display(display_index, &bi);
     get_invview_for_display(display_index, &invView);
 
-    vtkDebugMacro("\tAspect ratio: " << displayaspect);
-    vtkDebugMacro("Shader uniforms for display " << i);
-    vtkDebugMacro("\tpitch: " << pitch);
-    vtkDebugMacro("\ttilt: " << tilt);
-    vtkDebugMacro("\tcenter: " << center);
-    vtkDebugMacro("\tsubp: " << subp);
-    vtkDebugMacro("\tviewCone: " << viewcone);
-    vtkDebugMacro("\tfringe: " << fringe);
-    vtkDebugMacro("\tRI: " << ri
+    vtkLGInfoMacro("\tAspect ratio: " << displayaspect);
+    vtkLGInfoMacro("Shader uniforms for display " << i);
+    vtkLGInfoMacro("\tpitch: " << pitch);
+    vtkLGInfoMacro("\ttilt: " << tilt);
+    vtkLGInfoMacro("\tcenter: " << center);
+    vtkLGInfoMacro("\tsubp: " << subp);
+    vtkLGInfoMacro("\tviewCone: " << viewcone);
+    vtkLGInfoMacro("\tfringe: " << fringe);
+    vtkLGInfoMacro("\tRI: " << ri
                            << "\n \tBI: " << bi
                            << "\tinvView: " << invView);
   }
@@ -480,7 +491,7 @@ void vtkLookingGlassInterface::SetupQuiltSettings(int preset)
 void vtkLookingGlassInterface::SetupQuiltSettings(const std::string& deviceType)
 {
   auto byDevice = this->GetSettingsByDevice();
-  vtkLog(INFO, "Setting up quilt settings for device type: " << deviceType);
+  vtkLGInfoMacro( "Setting up quilt settings for device type: " << deviceType);
   if (byDevice.count(deviceType))
   {
     auto deviceSettings = byDevice[deviceType];
@@ -498,6 +509,7 @@ void vtkLookingGlassInterface::SetupQuiltSettings(const std::string& deviceType)
 // Initialize the rendering window, must be called first
 void vtkLookingGlassInterface::Initialize(void)
 {
+  vtkWarningMacro("Initialize called, Initialized=" << this->Initialized);
   if (this->Initialized)
   {
     return;
@@ -579,7 +591,7 @@ void vtkLookingGlassInterface::Initialize(void)
         get_device_name_for_display(display_index, &name_count, device_name.data());
         std::wstring name_wstr(device_name.data()); // stops at null terminator
         this->DeviceType = std::string(name_wstr.begin(), name_wstr.end());
-        vtkLog(INFO, "Detected device: \"" << this->DeviceType << "\"");
+        vtkLGInfoMacro( "Detected device: \"" << this->DeviceType << "\"");
       }
     }
 
@@ -589,7 +601,7 @@ void vtkLookingGlassInterface::Initialize(void)
     if (get_default_quilt_settings_for_display(display_index, &sdkAspect,
           &sdkQuiltWidth, &sdkQuiltHeight, &sdkColumns, &sdkRows))
     {
-      vtkLog(INFO, "SDK quilt settings: " << sdkQuiltWidth << "x" << sdkQuiltHeight
+      vtkLGInfoMacro( "SDK quilt settings: " << sdkQuiltWidth << "x" << sdkQuiltHeight
         << " px, " << sdkColumns << "x" << sdkRows << " tiles, aspect " << sdkAspect);
       this->QuiltSize[0] = sdkQuiltWidth;
       this->QuiltSize[1] = sdkQuiltHeight;
@@ -1155,4 +1167,19 @@ void vtkLookingGlassInterface::StopRecordingQuilt()
   writer->End();
 
   this->IsRecording = false;
+}
+
+//------------------------------------------------------------------------------
+void vtkLookingGlassInterface::SetCustomQuiltSettings(
+  int tilesX, int tilesY, int quiltWidth, int quiltHeight)
+{
+  this->QuiltTiles[0] = tilesX;
+  this->QuiltTiles[1] = tilesY;
+  this->QuiltSize[0] = quiltWidth;
+  this->QuiltSize[1] = quiltHeight;
+  this->NumberOfTiles = tilesX * tilesY;
+  this->RenderSize[0] = quiltWidth / tilesX;
+  this->RenderSize[1] = quiltHeight / tilesY;
+  this->AdjustCameraAspectRatio =
+    static_cast<double>(this->RenderSize[0]) / this->RenderSize[1];
 }

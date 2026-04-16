@@ -163,6 +163,12 @@ public:
    */
   static std::vector<std::string> GetDeviceTypes();
 
+  /**
+   * Set custom quilt tile counts and quilt size, and immediately apply them.
+   * quiltWidth/quiltHeight are the total pixel dimensions of the quilt texture.
+   */
+  void SetCustomQuiltSettings(int tilesX, int tilesY, int quiltWidth, int quiltHeight);
+
 protected:
   vtkCocoaLookingGlassRenderWindow();
   ~vtkCocoaLookingGlassRenderWindow() override;

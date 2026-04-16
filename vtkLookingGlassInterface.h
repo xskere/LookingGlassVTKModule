@@ -267,6 +267,14 @@ public:
   static DeviceTypes GetDevices();
 
   /**
+   * Set custom quilt tile counts and quilt size, and immediately apply them.
+   * Recalculates NumberOfTiles and RenderSize. Framebuffers will be resized
+   * automatically on the next render call.
+   * quiltWidth/quiltHeight are the total pixel dimensions of the quilt texture.
+   */
+  void SetCustomQuiltSettings(int tilesX, int tilesY, int quiltWidth, int quiltHeight);
+
+  /**
    * Disconnect from the Looking Glass device.
    */
   void Disconnect();
